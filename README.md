@@ -1,4 +1,4 @@
-# Disaster Intelligence Dashboard (Windows)
+# Disaster Intelligence Dashboard 
 
 ## Included
 - Dark dashboard UI (`frontend/index.html`)
