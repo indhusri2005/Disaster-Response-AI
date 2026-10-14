@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Disaster Intelligence Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{color-scheme:dark}body{background:#06111f;color:#e5eefb;font-family:Inter,Segoe UI,Arial,sans-serif}
+.panel{background:linear-gradient(145deg,#0d2034,#091727);border:1px solid #1c3550;border-radius:16px}
+.muted{color:#8ba4bf}.metric{background:#0a1b2d;border:1px solid #1b3652;border-radius:14px}
+.btn{background:#2563eb;border-radius:10px;padding:10px 16px;font-weight:700}.btn:disabled{opacity:.6}
+input[type=file]{font-size:12px}.tag{border:1px solid #27445f;background:#0b1b2d;border-radius:999px;padding:4px 9px;font-size:11px}
+</style>
+</head>
+<body>
+<header class="border-b border-slate-800 px-5 py-4 flex flex-wrap gap-4 justify-between items-center">
+ <div class="flex gap-3 items-center"><div class="text-3xl">🛰️</div><div><h1 class="text-xl md:text-2xl font-bold">Disaster Intelligence Dashboard</h1></div></div>
+</header>
+<main class="max-w-[1600px] mx-auto p-4 md:p-6 space-y-5">
+<section class="panel p-5">
+ <div><h2 class="font-bold text-lg">Run disaster assessment</h2></div>
+ <div class="grid md:grid-cols-1 gap-4 mt-4">
+  <label class="block text-sm">
+   <span class="font-medium">Satellite image (PNG/JPG)</span>
+   <input id="imageFile" type="file" accept="image/png,image/jpeg" class="block mt-2 w-full rounded-lg border border-slate-700 p-3 bg-slate-950">
+  </label>
+ </div>
+ <div class="flex flex-wrap gap-3 mt-4 items-center"><button id="runBtn" class="btn" onclick="runAnalysis()">▶ Run</button><span id="statusText" class="text-sm muted"></span></div>
+</section>
+<section class="grid grid-cols-2 xl:grid-cols-4 gap-3">
+ <div class="metric p-4"><p class="muted text-sm">Total Buildings</p><p id="total" class="text-3xl font-bold mt-2">—</p><p class="text-xs muted mt-1">Classified by Swin-T</p></div>
+ <div class="metric p-4"><p class="muted text-sm">Severely Damaged</p><p id="severe" class="text-3xl font-bold text-red-400 mt-2">—</p><p class="text-xs muted mt-1">Destroyed + Major</p></div>
+ <div class="metric p-4"><p class="muted text-sm">DBSCAN Clusters</p><p id="clusters" class="text-3xl font-bold text-sky-300 mt-2">—</p><p class="text-xs muted mt-1">Spatial groups</p></div>
+ <div class="metric p-4"><p class="muted text-sm">Affected Buildings</p><p id="affected" class="text-3xl font-bold text-amber-300 mt-2">—</p><p id="affectedPct" class="text-xs muted mt-1">— affected</p></div>
+</section>
+<section class="grid xl:grid-cols-5 gap-4">
+ <div class="panel p-4 xl:col-span-3"><div class="flex flex-wrap justify-between items-center gap-2 mb-3"><h2 class="font-bold">Damage Polygon Overlay</h2><span class="tag">Red destroyed · Orange major · Yellow minor · Green no damage</span></div>
+ <div id="mapPlaceholder" class="min-h-72 flex items-center justify-center text-center muted rounded-xl bg-slate-950 border border-slate-800 p-6">After analysis, the actual uploaded image with building polygon predictions appears here.</div><img id="damageMap" class="hidden w-full rounded-xl border border-slate-700" alt="Predicted building damage polygon overlay"><a id="mapDownload" class="hidden text-sm text-sky-300 underline mt-3 inline-block" download="damage_map.png">Download overlay</a></div>
+ <div class="panel p-4 xl:col-span-2"><h2 class="font-bold mb-3">Damage Distribution</h2><div class="h-64"><canvas id="damageChart"></canvas></div><div id="damageLegend" class="space-y-2 text-sm mt-2"></div></div>
+</section>
+<section class="grid xl:grid-cols-2 gap-4">
+ <div class="panel p-4"><h2 class="font-bold mb-3">DBSCAN Spatial Clusters</h2><div class="h-72"><canvas id="clusterChart"></canvas></div><p class="text-xs muted mt-2">Coordinates are pixel centroids from annotation polygons. Noise points are shown separately.</p></div>
+ <div class="panel p-4"><h2 class="font-bold mb-3">Cluster Priority Assessment</h2><div class="overflow-auto"><table class="w-full text-sm"><thead class="text-left muted border-b border-slate-700"><tr><th class="py-2">Cluster</th><th>Buildings</th><th>Severity</th><th>Score</th><th>Priority</th></tr></thead><tbody id="clusterRows"><tr><td colspan="5" class="py-8 text-center muted">Run an assessment to populate cluster results.</td></tr></tbody></table></div>
+ <h3 class="font-bold mt-5 mb-3">Estimated Resource Planning</h3><div id="resources" class="grid grid-cols-2 gap-2"><div class="metric p-3 muted text-sm">Results appear after analysis.</div></div><p class="text-xs muted mt-3">Resource quantities are algorithmic planning estimates only, not validated emergency dispatch instructions.</p></div>
+</section>
+<section class="panel p-5"><div class="flex flex-wrap justify-between gap-3 items-center"><h2 class="font-bold text-lg">Resource Allocation and Llama Report</h2><button id="reportDownload" class="tag hidden" onclick="downloadReport()">⬇ Download report.txt</button></div><div id="report" class="whitespace-pre-wrap text-sm leading-7 text-slate-200 mt-4 max-w-5xl"></div></section>
+</main>
+<script>
+let damageChart=null, clusterChart=null, latestReport="";
+const labels={destroyed:"Destroyed",major_damage:"Major Damage",minor_damage:"Minor Damage",no_damage:"No Damage"};
+const colors={destroyed:"#ef4444",major_damage:"#f97316",minor_damage:"#eab308",no_damage:"#22c55e"};
+function setText(id,value){document.getElementById(id).textContent=value}
+async function runAnalysis(){
+ const input=document.getElementById("imageFile");
+ const image=input.files ? input.files[0] : null;
+ if(!image){setText("statusText","Please select the satellite image file.");return}
+ const btn=document.getElementById("runBtn");btn.disabled=true;btn.textContent="⏳ Analysing…";setText("statusText","Analysing…");
+ try{
+  const fd=new FormData();fd.append("image",image);
+  const response=await fetch("http://127.0.0.1:8000/api/analyze",{method:"POST",body:fd});
+  const data=await response.json();if(!response.ok)throw new Error(data.detail||"Analysis failed");
+  renderResults(data);setText("statusText","");
+ }catch(e){setText("statusText","Error: "+e.message);console.error(e)}finally{btn.disabled=false;btn.textContent="▶ Run"}
+}
+function renderResults(d){
+ setText("total",d.total_buildings);setText("severe",d.destroyed+d.major_damage);setText("clusters",d.total_clusters);setText("affected",d.affected_buildings);setText("affectedPct",d.affected_percentage+"% affected · "+d.overall_severity);
+ const bytes=Uint8Array.from(atob(d.damage_map_base64),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:"image/png"}));
+ const img=document.getElementById("damageMap");img.src=url;img.classList.remove("hidden");document.getElementById("mapPlaceholder").classList.add("hidden");const link=document.getElementById("mapDownload");link.href=url;link.classList.remove("hidden");
+ const order=["destroyed","major_damage","minor_damage","no_damage"];const vals=order.map(k=>d[k]);
+ if(damageChart)damageChart.destroy();damageChart=new Chart(document.getElementById("damageChart"),{type:"doughnut",data:{labels:order.map(k=>labels[k]),datasets:[{data:vals,backgroundColor:order.map(k=>colors[k]),borderColor:"#091727",borderWidth:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:"#d8e6f6"}}}}});
+ document.getElementById("damageLegend").innerHTML=order.map(k=>`<div class="flex justify-between"><span style="color:${colors[k]}">● ${labels[k]}</span><b>${d[k]} <span class="muted font-normal">(${(100*d[k]/d.total_buildings).toFixed(1)}%)</span></b></div>`).join("");
+ const clusterGroups={};for(const p of d.cluster_points){const key=p.cluster_id===-1?"Noise / Outlier":"Cluster "+p.cluster_id;(clusterGroups[key] ||= []).push({x:p.x,y:p.y})}
+ const palette=["#ef4444","#f97316","#eab308","#22c55e","#60a5fa","#c084fc","#f472b6"];
+ const datasets=Object.entries(clusterGroups).map(([label,points],i)=>({label,data:points,backgroundColor:label.startsWith("Noise")?"#94a3b8":palette[i%palette.length],pointRadius:3,showLine:false}));
+ if(clusterChart)clusterChart.destroy();clusterChart=new Chart(document.getElementById("clusterChart"),{type:"scatter",data:{datasets},options:{responsive:true,maintainAspectRatio:false,scales:{x:{title:{display:true,text:"X pixel",color:"#8ba4bf"},ticks:{color:"#8ba4bf"},grid:{color:"#1c3550"}},y:{reverse:true,title:{display:true,text:"Y pixel",color:"#8ba4bf"},ticks:{color:"#8ba4bf"},grid:{color:"#1c3550"}}},plugins:{legend:{labels:{color:"#d8e6f6",boxWidth:10}}}}});
+ const priorityColor={CRITICAL:"#ef4444",HIGH:"#f97316",MEDIUM:"#eab308",LOW:"#22c55e"};
+ document.getElementById("clusterRows").innerHTML=d.clusters.length?d.clusters.map(c=>`<tr class="border-b border-slate-800"><td class="py-3">#${c.cluster_id}</td><td>${c.total_buildings}</td><td>${c.severity_score.toFixed(1)}%</td><td>${c.priority_score.toFixed(1)}</td><td style="color:${priorityColor[c.priority]||"#94a3b8"}">${c.priority}</td></tr>`).join(""):`<tr><td colspan="5" class="py-5 muted">DBSCAN found no clusters (all points may be noise).</td></tr>`;
+ const res=d.estimated_resources;const resourceLabels={rescue_teams:"Rescue Teams",ambulances:"Ambulances",fire_rescue_trucks:"Fire/Rescue Trucks",medical_teams:"Medical Teams",relief_camps:"Relief Camps"};
+ document.getElementById("resources").innerHTML=Object.entries(res).map(([k,v])=>`<div class="metric p-3"><div class="muted text-xs">${resourceLabels[k]||k}</div><div class="text-2xl font-bold mt-1">${v}</div></div>`).join("");
+ latestReport=d.llm_report||"No report returned.";document.getElementById("report").textContent=latestReport;document.getElementById("reportDownload").classList.remove("hidden");
+}
+function downloadReport(){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([latestReport],{type:"text/plain"}));a.download="disaster_response_report.txt";a.click();URL.revokeObjectURL(a.href)}
+</script>
+</body></html>
